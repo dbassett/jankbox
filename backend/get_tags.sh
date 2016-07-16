@@ -99,8 +99,7 @@ do
         fi
 
 	# If we hit a frame with zero size, then we'll assume that we've reached
-	# the end of the useful frames.  Let's hope we don't make an ASS out of U
-	# and ME.
+	# the end of the useful frames.
 	[ $FSIZE -eq 0 ] && break
 
 	# The frame name is the first 3 or 4 bytes at the start of the header,
