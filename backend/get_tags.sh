@@ -20,17 +20,19 @@ asciify(){
 	done
 }
 
-tag_size(){
-	# This craziness takes the 7 lowest bits of each byte, shifts it left some
-	# number of bits, adds them together, then shifts the whole results right
-	# four bits, resulting in a 28 bit number, which is the size of the tag.
+unsync_size(){
+	# This craziness takes the 7 lowest bits of each byte, shifts it left
+	# some number of bits, adds them together, then shifts the whole results
+	# right four bits, resulting in a 28 bit number, which is the size of
+	# the tag. It seems like this is necessary to distinguish this data from
+	# syncrhonization data later in the file.
 	#
-	# Why not use all 32 bits of the four bytes you set aside to hold the frame size?
-	# Or even the lowest 28 contiguous bits? Ask the clowns who designed this shit.
+	# Ultimately, what we're doing looks like this:
+        # 0AAAAAAA0BBBBBBB0CCCCCCC0DDDDDDD->AAAAAAABBBBBBBCCCCCCCDDDDDDD0000->
+        # 0000AAAAAAABBBBBBBCCCCCCCDDDDDDD->Decimal
+        HEX=$1
 
-	HEX=$1
-
-	printf "%d" $(( ( ( ( 0x${HEX:0:2} & 0x7f) << 25 ) + ( ( 0x${HEX:2:2} & 0x7f ) << 18 ) + ( ( 0x${HEX:4:2} & 0x7f ) << 11 ) + ( ( 0x${HEX:6:2} & 0x7f ) << 4 ) ) >> 4 ))
+        printf "%d" $(( ( ( ( 0x${HEX:0:2} & 0x7f) << 25 ) + ( ( 0x${HEX:2:2} & 0x7f ) << 18 ) + ( ( 0x${HEX:4:2} & 0x7f ) << 11 ) + ( ( 0x${HEX:6:2} & 0x7f ) << 4 ) ) >> 4 ))
 }
 
 FILE=$1
@@ -44,18 +46,18 @@ FILE=$1
 # names are the keys for our associative array, and tag names are 3 or 4
 # characters, depending on version.
 
-case $( read_bytes "$FILE" 3 1 ) in
+VERSION=$( read_bytes "$FILE" 3 1 )
+
+case $VERSION in
 	02)
 		FNAME_SIZE=3
 		FSIZE_SIZE=3
 		HSIZE=6
-		echo "ID3v2.2"
 		;;
-	03)
+	03|04)
 		FNAME_SIZE=4
 		FSIZE_SIZE=4
 		HSIZE=10
-		echo "ID3v2.3"
 		;;
 	*)
 		echo "Unknown ID3v2 tag minor version.  Exiting."
@@ -64,12 +66,10 @@ case $( read_bytes "$FILE" 3 1 ) in
 esac
 
 # Read the size of the tag from the tag header.  This info is located starting
-# at byte 6 of the tag, and is 4 bytes long.  See "tag_size()" above for more
+# at byte 6 of the tag, and is 4 bytes long.  See "unsync_size" above for more
 # details on this insanity.
 
-TAG_SIZE=$( tag_size $( read_bytes "$FILE" 6 4 ) )
-
-echo "Tag Size: $TAG_SIZE"
+TAG_SIZE=$( unsync_size $( read_bytes "$FILE" 6 4 ) )
 
 # We have all the info we need from the first 10 bytes, so we'll
 # fast forward to the first frame's header
@@ -82,27 +82,32 @@ POINTER=10
 
 while [ $POINTER -lt $TAG_SIZE ]
 do
+	# Get our frame size first.  Version 4 stores the size of the frames the same
+	# way that all the tags store the overall tag size.  Versions .2 and .3 just
+	# store the frame sizes as 24 and 32 bit integers, respectively.
+        if [ $VERSION = "04" ]
+        then
+                FSIZE=$( unsync_size $( read_bytes "$FILE" $(( $POINTER + $FNAME_SIZE )) $FSIZE_SIZE ) )
+        else
+                FSIZE=$( printf "%d" 0x$( read_bytes "$FILE" $(( $POINTER + $FNAME_SIZE )) $FSIZE_SIZE ) )
+        fi
+
+	# If we hit a frame with zero size, then we'll assume that we've reached
+	# the end of the useful frames.  Let's hope we don't make an ASS out of U
+	# and ME.
+	[ $FSIZE -eq 0 ] && break
+
 	# The frame name is the first 3 or 4 bytes at the start of the header,
 	# depending on minor version
 
 	FNAME=$( read_bytes "$FILE" $POINTER $FNAME_SIZE | asciify )
-
-	# Immediately after the frame name, you'll find the frame size.  Again,
-	# the number of byte that make up the size is determined by the version.
-
-	FSIZE=$( printf "%d" 0x$( read_bytes "$FILE" $(( $POINTER + $FNAME_SIZE )) $FSIZE_SIZE ) )
-	
-	# If we get to a frame with zero size, we're probably past the end of useful frames
-
-	[ $FSIZE -eq 0 ] && break
 
 	# Now read the frame data in, converting to ascii in the process.  Store in our
 	# blatantly incompatible (pre-Bash 4.something) associative array.  DEAL WITH IT.
 
 	FRAME=$( read_bytes "$FILE" $(( $POINTER + $HSIZE )) $FSIZE | asciify )
 
-	echo "$FNAME [$FSIZE]:"
-	echo "$FRAME"
+	echo "$FNAME: $FRAME"
 
 	# Each frame is equal to the header size (for the given version) plus the
 	# frame data size.  Move our pointer to the start of the next frame header.
