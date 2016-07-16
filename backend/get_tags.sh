@@ -1,8 +1,14 @@
 #!/bin/bash
 
+# Usage: get_tags.sh [FILENAME]
+#
+# This script reads id3v2 tags from mp3 files, and prints the results to your console.
+# 
+
 read_bytes(){
 	# Read some bytes from the given file using "od" starting at an offset
-	# and continuing for some number of bytes.
+	# and continuing for some number of bytes.  Why use "od" instead of "hd"
+	# or "xxd"?  Because (no shit) I want this to be able to run on IRIX.
 
 	FILENAME=$1
 	OFFSET=$2
